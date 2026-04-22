@@ -12,6 +12,7 @@ load_dotenv()
 VECTORSTORE_DIR = "vectorstore"
 
 API_KEY = os.getenv("GITHUB_TOKEN")
+
 LLM_CONFIG = {
     "model": "gpt-4o-mini",
     "temperature": 0.1,  # Pequeño margen para evitar respuestas muy rígidas
