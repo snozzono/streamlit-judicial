@@ -79,9 +79,9 @@ def generar_vectorstore(chunks: list, api_key: str) -> None:
 
 
 def main() -> None:
-    api_key = os.getenv("GITHUB_TOKEN")
+    api_key = os.getenv("GH_TOKEN")
     if not api_key:
-        logger.error("GITHUB_TOKEN no encontrado. Revisa tu .env")
+        logger.error("GH_TOKEN no encontrado. Revisa tu .env")
         sys.exit(1)
 
     if not os.path.exists(CONFIG.docs_dir):

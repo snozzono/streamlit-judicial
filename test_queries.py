@@ -40,9 +40,9 @@ RESULTS_FILE = "test_results.md"
 K = CONFIG.k_default
 TEMPERATURE = CONFIG.temperature_default
 
-API_KEY = os.getenv("GITHUB_TOKEN")
+API_KEY = os.getenv("GH_TOKEN")
 if not API_KEY:
-    print("❌ GITHUB_TOKEN no encontrado en variables de entorno.")
+    print("❌ GH_TOKEN no encontrado en variables de entorno.")
     sys.exit(1)
 
 # ── CONSULTAS DE PRUEBA ───────────────────────────────────────────────────────

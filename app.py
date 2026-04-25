@@ -22,12 +22,12 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-API_KEY = os.getenv("GITHUB_TOKEN")
+API_KEY = os.getenv("GH_TOKEN")
 
 # Validación temprana: set_page_config debe ir antes de cualquier otro st.*
 if not API_KEY:
     st.set_page_config(page_title="Error — Asistente Tributario", page_icon="❌")
-    st.error("❌ GITHUB_TOKEN no encontrado en variables de entorno. Revisa tu archivo .env.")
+    st.error("❌ GH_TOKEN no encontrado en variables de entorno. Revisa tu archivo .env.")
     st.stop()
 
 st.set_page_config(
