@@ -1,3 +1,20 @@
+# Secretos
 .env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+
+# Resultados de tests (generados automáticamente)
+test_results.md
+
+# IDE
+.vscode/
+.idea/
+
+# Legacy
 drive/
 pendientes.txt
