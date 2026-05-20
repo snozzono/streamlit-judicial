@@ -1,100 +1,43 @@
-# ⚖️ Asistente Tributario — Ruiz Salazar Tributaria
+# ⚖️ Asistente Tributario — Bufete Ruiz Salazar
 
-Asistente de consultas tributarias basado en RAG (*Retrieval-Augmented Generation*) sobre normativa chilena. Responde preguntas citando el artículo o decreto exacto, sin inventar normativa.
+Agente conversacional con LangGraph para consultas de normativa tributaria chilena (DL-824, DL-825, DL-830 y circulares SII). El sistema integra herramientas de consulta, razonamiento y escritura en un flujo de trabajo organizacional con memoria de corto y largo plazo.
 
-## Arquitectura
+> ⚠️ Este asistente es orientativo. Las respuestas deben ser validadas por un contador o abogado tributario.
 
-```
-docs/             ← PDFs de la normativa (DL 824, DL 825, DL 830)
-    │
-    ▼
-indexar.py        ← Carga, chunking y generación de embeddings
-    │
-    ▼
-vectorstore/      ← Índice FAISS persistido (index.faiss + index.pkl)
-    │
-    ▼
-app.py            ← Interfaz Streamlit + cadena RetrievalQA
-```
-
-**Stack:**
-
-- **LLM:** `gpt-4o-mini` vía GitHub Models
-- **Embeddings:** `text-embedding-3-small` vía GitHub Models
-- **Vector store:** FAISS (local)
-- **Framework:** LangChain + Streamlit
+---
 
 ## Requisitos
 
-- Python 3.10 – 3.13 (el proyecto **no es compatible con Python 3.14** por restricciones de Pydantic V1 en LangChain)
-- Token de GitHub Models con acceso a la API de Azure AI Inference
+- Python 3.10 – 3.13
+- Token de [GitHub Models](https://github.com/marketplace/models) con acceso a Azure AI Inference
 
 ## Instalación
 
 ```bash
-git clone https://github.com/<tu-usuario>/ing-sol-parcial-1.git
-cd ing-sol-parcial-1
-
 pip install -r requirements.txt
 ```
 
-Copia el archivo de ejemplo y agrega tu token:
-
-```bash
-cp .env.example .env
-```
-
-`.env`:
+Crea `.env` en la raíz:
 
 ```
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 ```
 
-## Corpus normativo
+## Indexación (solo la primera vez)
 
-Coloca los PDFs en la carpeta `docs/`. El proyecto incluye:
-
-
-| Archivo                  | Descripción                                      |
-| ------------------------ | ------------------------------------------------- |
-| `DL-824_31-DIC-1974.pdf` | Ley sobre Impuesto a la Renta                     |
-| `DL-825_31-DIC-1974.pdf` | Ley sobre Impuesto a las Ventas y Servicios (IVA) |
-| `DL-830_31-DIC-1974.pdf` | Código Tributario                                |
-
-## Indexación
-
-Ejecutar **una sola vez** (o cada vez que se agreguen/modifiquen documentos):
+Coloca los PDFs de normativa en `docs/` y ejecuta:
 
 ```bash
 python indexar.py
 ```
 
-El script realiza lo siguiente:
-
-1. Carga todos los PDFs en `docs/`
-2. Divide el texto en chunks de ~512 tokens con solapamiento de 80 tokens
-3. Genera embeddings en batches de 50 chunks para no exceder el límite de 64k tokens de GitHub Models
-4. Guarda el índice FAISS en `vectorstore/`
-
-Output esperado:
+Genera el vectorstore en `vectorstore/`. Output esperado:
 
 ```
 === Indexando corpus normativo ===
-
-1. Cargando PDFs...
-  Cargando: DL-824_31-DIC-1974.pdf
-  Cargando: DL-825_31-DIC-1974.pdf
-  Cargando: DL-830_31-DIC-1974.pdf
-  Total páginas cargadas: 483
-
-2. Generando chunks...
-  Total chunks generados: 2399
-
-3. Generando embeddings y construyendo vectorstore...
-  Procesando 2399 chunks en batches de 50...
-  ...
-  Vectorstore guardado en 'vectorstore/'
-
+Total páginas cargadas: 483
+Total chunks generados: 2399
+Vectorstore guardado en 'vectorstore/'
 === Indexación completada ===
 ```
 
@@ -104,57 +47,153 @@ Output esperado:
 streamlit run app.py
 ```
 
-La aplicación quedará disponible en `http://localhost:8501`.
+Disponible en `http://localhost:8501`.
 
-## Uso
+---
 
-1. Escribe tu consulta tributaria en el campo de texto (ej: *¿Qué actividades están exentas de IVA según el artículo 12 del DL 825?*)
-2. Ajusta el slider **"Fragmentos a recuperar (k)"** en el sidebar según la complejidad de la consulta (recomendado: 4–6)
-3. Haz clic en **Consultar**
-4. La respuesta incluye el análisis con citación de artículos y los fragmentos fuente expandibles
+## Arquitectura del agente (EP2)
 
-> ⚠️ Este asistente es orientativo. Las respuestas deben ser validadas por un contador o abogado tributario.
-
-## Estructura del proyecto
+### Diagrama de orquestación
 
 ```
-ing-sol-parcial-1/
-├── docs/                  # PDFs de normativa (no versionados)
-├── vectorstore/           # Índice FAISS generado (no versionado)
-│   ├── index.faiss
-│   └── index.pkl
-├── app.py                 # Aplicación Streamlit
-├── indexar.py             # Script de indexación
-├── requirements.txt       # Dependencias Python
-├── .env                   # Variables de entorno (no versionado)
-├── .env.example           # Plantilla de variables de entorno
-└── .gitignore
+                   ┌──────────────────────────────────────────────┐
+                   │                EstadoAgente                   │
+                   │  consulta · historial_mensajes (acumulado)    │
+                   │  chunks_normativa · casos_similares           │
+                   │  contexto_acumulado · evaluacion              │
+                   │  iteraciones · modo · respuesta · ruta_memo   │
+                   └──────────────────────────────────────────────┘
+
+START
+  │
+  ▼
+┌─────────────┐
+│  classifier │  Detecta intención: "responder" | "memo"
+└──────┬──────┘
+       │  fan-out paralelo (Send)
+       ├──────────────────────────────┐
+       ▼                              ▼
+┌──────────────────┐      ┌───────────────────────┐
+│ buscar_normativa │      │    buscar_casos        │
+│  FAISS DL-824    │      │  FAISS largo plazo     │
+│  DL-825  DL-830  │      │  (sesiones anteriores) │
+└────────┬─────────┘      └──────────┬────────────┘
+         │       fan-in              │
+         └─────────────┬─────────────┘
+                       ▼
+             ┌──────────────────┐
+             │ evaluar_consulta │  LLM calcula confianza 0.0–1.0
+             └────────┬─────────┘
+                      │
+         ┌────────────┼──────────────────┐
+         │            │                  │
+    confianza     modo=="memo"      confianza>=0.7
+    <0.7 AND      confianza>=0.7    modo=="responder"
+    iter<max           │                  │
+         │             ▼                  ▼
+         ▼      ┌─────────────┐    ┌───────────┐
+    ┌─────────┐ │redactar_memo│    │ responder │
+    │razonador│ │ genera .docx│    │ estructura│
+    │(≤2 loops│ └──────┬──────┘    └─────┬─────┘
+    └────┬────┘        │                 │
+         │             └────────┬────────┘
+         │ refinación           ▼
+         └──────────► ┌──────────────┐
+                      │   persistir  │  no-op en consultas normales;
+                      └──────┬───────┘  app.py llama persistir_caso()
+                             │          al cerrar sesión → anonimiza
+                             ▼          y guarda en FAISS largo plazo
+                            END
 ```
 
-## Dependencias
+### Componentes
+
+| Archivo | Rol |
+|---|---|
+| `config.py` | Parámetros centralizados: modelos, rutas, umbrales (`confianza_minima=0.7`, `max_reasoning_iterations=2`) |
+| `anonymizer.py` | Anonimización de RUTs, emails, nombres y empresas antes de persistir en largo plazo |
+| `memory.py` | `MemoriaCortoplazo` (buffer de mensajes por sesión) + `MemoriaLargoplazo` (FAISS de casos anteriores) |
+| `tools.py` | 6 herramientas: `buscar_normativa`, `buscar_casos_anteriores`, `evaluar_consulta`, `redactar_memo`, `guardar_drive`, `enviar_gmail` |
+| `graph.py` | Grafo LangGraph: 8 nodos, fan-out paralelo con `Send`, loop de razonamiento adaptativo |
+| `indexar.py` | Indexación de PDFs → vectorstore FAISS (EP1, no modificar) |
+| `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica |
+
+---
+
+## Flujo de una consulta
+
+1. El usuario escribe una consulta en el chat (`st.chat_input`).
+2. **`classifier`** determina el modo: detecta palabras clave como "memo" o "redactar" para activar la generación de documento.
+3. **`buscar_normativa`** y **`buscar_casos`** se ejecutan en **paralelo** (fan-out via `Send`), consultando el vectorstore de normativa y el índice de casos anteriores simultáneamente.
+4. **`evaluar_consulta`** usa un LLM secundario para calcular la confianza del contexto recuperado (0.0–1.0).
+5. Si confianza < 0.7 y quedan iteraciones: **`razonador`** genera una consulta refinada, realiza una búsqueda adicional en FAISS y repite la evaluación (máximo 2 veces).
+6. Si confianza ≥ 0.7: **`responder`** genera la respuesta estructurada (Análisis / Artículos citados / Limitaciones) o **`redactar_memo`** genera un `.docx` formal descargable.
+7. Al hacer clic en **"Cerrar sesión"**, `app.py` llama `memoria_largo_plazo.persistir_caso()`: el historial es anonimizado (RUTs, nombres, empresas) y guardado en FAISS para mejorar futuras consultas similares.
+
+---
+
+## Decisiones de diseño
+
+**LangGraph sobre LangChain Agents clásicos:** el grafo explícito con `StateGraph` permite controlar el loop de razonamiento con un tope configurable de iteraciones, evitando bucles infinitos y costos de API imprevistos.
+
+**Fan-out paralelo:** `buscar_normativa` y `buscar_casos` no tienen dependencia entre sí. Ejecutarlos con `Send` en paralelo reduce la latencia de cada turno.
+
+**Auto-evaluación de confianza:** `evaluar_consulta` implementa una forma de planificación adaptativa: el agente decide por sí mismo si necesita más contexto antes de responder, ajustando su comportamiento según las condiciones del entorno.
+
+**Anonimización antes de persistir:** protección de datos personales en el índice de largo plazo usando un pipeline en dos pasos: regex (RUT, email, dirección) + LLM (nombres y razones sociales).
+
+---
+
+## Estructura de carpetas
 
 ```
-streamlit
-langchain
-langchain-openai
-langchain-community
-langchain-text-splitters
-langchain-classic
-faiss-cpu
-pypdf
-python-dotenv
-openai
-tiktoken
+├── docs/              ← PDFs de normativa (DL-824, DL-825, DL-830)
+├── vectorstore/       ← index.faiss + index.pkl  (generado por indexar.py)
+├── casos/             ← casos.index + casos.pkl  (generado al cerrar sesión)
+├── memos/             ← memorándums .docx generados
+├── config.py
+├── anonymizer.py
+├── memory.py
+├── tools.py
+├── graph.py
+├── indexar.py
+├── app.py
+├── requirements.txt
+└── .env               ← no versionado
 ```
 
-## Notas técnicas
+## Stack tecnológico
 
-**Chunking con tokenizer real:** El splitter usa `tiktoken` con la codificación `cl100k_base` para medir tokens reales en lugar de caracteres, evitando que chunks sobrepasen el límite del modelo de embeddings.
+| Tecnología | Versión | Uso |
+|---|---|---|
+| LangGraph | 0.2+ | Orquestación del agente (grafo de estados) |
+| LangChain | 0.2+ | Abstracciones LLM, embeddings, FAISS |
+| GitHub Models (Azure AI Inference) | — | `gpt-4o-mini` + `text-embedding-3-small` |
+| FAISS | — | Vectorstore normativa y memoria de largo plazo |
+| Streamlit | — | Interfaz de usuario web |
+| python-docx | — | Generación de memorándums Word |
 
-**Batching de embeddings:** GitHub Models limita las requests a 64k tokens acumulados. El script procesa los chunks en batches de 50 y fusiona los índices parciales con `FAISS.merge_from()`.
+---
 
-**Cache de la cadena:** `cargar_chain()` está decorada con `@st.cache_resource` y recibe `k` como parámetro, de modo que Streamlit reconstruye la cadena solo cuando cambia el valor del slider.
+## Pruebas
 
-## Licencia
+```bash
+pytest test_unit.py       # tests unitarios
+pytest test_queries.py    # validación de consultas de ejemplo
+```
 
-Proyecto académico — Ingeniería de Soluciones con IA, DuocUC.
+---
+
+## Referencias
+
+- LangChain Inc. (2024). *LangGraph: Build stateful, multi-actor applications with LLMs*. https://langchain-ai.github.io/langgraph/
+- LangChain Inc. (2024). *LangChain Python Documentation*. https://python.langchain.com/docs/
+- Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., … Kiela, D. (2020). *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*. arXiv:2005.11401. https://arxiv.org/abs/2005.11401
+- Johnson, J., Douze, M., & Jégou, H. (2019). *Billion-scale similarity search with GPUs*. IEEE Transactions on Big Data, 7(3), 535–547. https://doi.org/10.1109/TBDATA.2019.2921572
+- Servicio de Impuestos Internos de Chile. (2024). *Decreto Ley N°824 — Ley sobre Impuesto a la Renta*. https://www.sii.cl
+- Servicio de Impuestos Internos de Chile. (2024). *Decreto Ley N°825 — Ley sobre Impuesto a las Ventas y Servicios*. https://www.sii.cl
+- Servicio de Impuestos Internos de Chile. (2024). *Decreto Ley N°830 — Código Tributario*. https://www.sii.cl
+
+---
+
+Proyecto académico — Ingeniería de Soluciones con IA (ISY0101), DuocUC 2025.

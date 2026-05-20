@@ -10,3 +10,5 @@ tiktoken
 python-dotenv
 openai
 pytest
+langgraph
+python-docx
