@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
@@ -50,6 +50,34 @@ st.markdown("""
 
 ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password") or os.getenv("ADMIN_PASSWORD", "admin123")
 
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 900  # 15 min
+
+
+def _check_lockout() -> tuple[bool, int | None]:
+    """Returns (is_locked, seconds_remaining)."""
+    attempts = st.session_state.get("login_attempts", 0)
+    lock_time = st.session_state.get("login_lock_time")
+    if attempts >= MAX_LOGIN_ATTEMPTS and lock_time:
+        elapsed = time.time() - lock_time
+        if elapsed < LOGIN_LOCKOUT_SECONDS:
+            return True, int(LOGIN_LOCKOUT_SECONDS - elapsed)
+        _reset_login_attempts()
+    return False, None
+
+
+def _register_failed_attempt():
+    st.session_state.login_attempts = st.session_state.get("login_attempts", 0) + 1
+    if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
+        st.session_state.login_lock_time = time.time()
+
+
+def _reset_login_attempts():
+    st.session_state.login_attempts = 0
+    st.session_state.login_lock_time = None
+
 
 def autenticar() -> bool:
     if st.session_state.get("admin_auth"):
@@ -63,14 +91,33 @@ def autenticar() -> bool:
     st.image("https://cdn.jsdelivr.net/npm/streamlit@1/dist/favicon.png", width=64)
     st.title("Panel de Monitoreo")
     st.caption("Acceso restringido — Bufete Ruiz Salazar")
-    password = st.text_input("Contraseña:", type="password", label_visibility="collapsed", placeholder="Ingrese contraseña")
+
+    locked, remaining = _check_lockout()
+    if locked:
+        mins, secs = divmod(remaining, 60)
+        st.warning(f"⛔ Cuenta bloqueada por demasiados intentos fallidos. Intenta de nuevo en **{mins}m {secs}s**.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return False
+
+    attempts_left = MAX_LOGIN_ATTEMPTS - st.session_state.get("login_attempts", 0)
+    password = st.text_input(
+        "Contraseña:", type="password", label_visibility="collapsed",
+        placeholder="Ingrese contraseña",
+    )
     if st.button("Ingresar", type="primary", use_container_width=True):
         if password and password == ADMIN_PASSWORD:
+            _reset_login_attempts()
             st.session_state.admin_auth = True
             st.query_params["auth"] = "1"
             st.rerun()
         else:
-            st.error("Contraseña incorrecta.")
+            _register_failed_attempt()
+            remaining = MAX_LOGIN_ATTEMPTS - st.session_state.get("login_attempts", 0)
+            if remaining > 0:
+                st.error(f"Contraseña incorrecta. Te quedan **{remaining}** intento(s).")
+            else:
+                st.error("Contraseña incorrecta. Cuenta bloqueada por 15 minutos.")
+                st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
     return False
 
