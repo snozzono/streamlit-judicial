@@ -1,6 +1,6 @@
 # ⚖️ Asistente Tributario — Bufete Ruiz Salazar
 
-Agente conversacional con LangGraph para consultas de normativa tributaria chilena (DL-824, DL-825, DL-830 y circulares SII). El sistema integra herramientas de consulta, razonamiento y escritura en un flujo de trabajo organizacional con memoria de corto y largo plazo.
+Agente conversacional con LangGraph para consultas de normativa tributaria chilena (DL-824, DL-825, DL-830 y circulares SII). El sistema integra herramientas de consulta, razonamiento y escritura en un flujo de trabajo organizacional con memoria de corto y largo plazo, más un **sistema de observabilidad (EP3)** para monitoreo de precisión, consistencia, latencia, errores y anomalías.
 
 > ⚠️ Este asistente es orientativo. Las respuestas deben ser validadas por un contador o abogado tributario.
 
@@ -22,6 +22,15 @@ Crea `.env` en la raíz:
 ```
 GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 ```
+
+Opcional — contraseña para el dashboard administrativo en `.streamlit/secrets.toml`:
+
+```toml
+[admin]
+password = "tu_contraseña"
+```
+
+Si no se define, se usará la variable de entorno `ADMIN_PASSWORD`.
 
 ## Indexación (solo la primera vez)
 
@@ -47,7 +56,8 @@ Vectorstore guardado en 'vectorstore/'
 streamlit run app.py
 ```
 
-Disponible en `http://localhost:8501`.
+Disponible en `http://localhost:8501`.  
+Dashboard administrativo en `http://localhost:8501/admin`.
 
 ---
 
@@ -106,7 +116,67 @@ START
                             END
 ```
 
+---
+
+## Sistema de Observabilidad (EP3)
+
+Se implementó un pipeline completo de monitoreo sobre el agente EP2, con métricas de precisión, consistencia, latencia, frecuencia de errores y consumo de tokens.
+
 ### Componentes
+
+| Archivo | Rol |
+|---|---|
+| `monitor_db.py` | ORM SQLite + ETL diario + detección de anomalías + recomendaciones |
+| `pages/admin.py` | Dashboard Streamlit con KPIs, gráficos, logs, anomalías |
+| `seed_data.py` | Genera datos sintéticos de prueba (7 días con perfiles variados) |
+
+### Métricas implementadas
+
+| Métrica | Cálculo |
+|---|---|
+| **Precisión** | `(análisis_ok + artículos_ok + limitaciones_ok) / (total × 3) × 100` |
+| **Consistencia** | `consultas_con_todas_las_secciones / total × 100` |
+| **Tasa de error** | `consultas_con_error / total × 100` |
+| **Latencia** | Promedio de `tiempo_ms` por día |
+| **Tokens** | `tokens_input + tokens_output` por consulta, promediado por día |
+
+### Dashboard
+
+- **KPIs**: total consultas, tasa de error, precisión, consistencia, tiempo promedio, tokens
+- **Métricas históricas**: gráficos de evolución diaria (líneas + barras)
+- **Consultas**: listado paginado con filtro por modo y detalle expandible
+- **Logs**: filtro por nivel (ERROR, WARNING, INFO, DEBUG)
+- **Errores**: frecuencia y detalle de errores
+- **Anomalías**: detección automática de picos de error, outliers de latencia, tendencia de precisión y patrones de fallo
+
+### Anomalías detectadas
+
+El sistema analiza los últimos 7 días y detecta:
+
+| Tipo | Algoritmo |
+|---|---|
+| Picos de error | `error_rate > mean + 2σ` del período |
+| Outliers de latencia | `tiempo_ms > mean + 3σ` del período |
+| Tendencia de precisión | Pendiente de regresión lineal (mejorando/estable/empeorando) |
+| Patrones de fallo | Errores agrupados por mensaje, ordenados por frecuencia |
+
+### Recomendaciones
+
+Basadas en los datos observados, el sistema genera sugerencias priorizadas (🔴 ALTA / 🟡 MEDIA / 🟢 BAJA) para optimizar errores, latencia, consumo de tokens, costos y precisión.
+
+### Seed data
+
+Para poblar el dashboard con datos de prueba:
+
+```bash
+python seed_data.py
+```
+
+Genera 105 consultas distribuidas en 7 días con perfiles variados (días normales, un pico de error y un día con latencia alta).
+
+---
+
+## Componentes
 
 | Archivo | Rol |
 |---|---|
@@ -117,6 +187,8 @@ START
 | `graph.py` | Grafo LangGraph: 8 nodos, fan-out paralelo con `Send`, loop de razonamiento adaptativo |
 | `indexar.py` | Indexación de PDFs → vectorstore FAISS (EP1, no modificar) |
 | `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica |
+| `monitor_db.py` | Sistema de monitoreo SQLite: consultas, logs, ETL diario, anomalías, recomendaciones |
+| `pages/admin.py` | Dashboard administrativo con KPIs, gráficos y detección de anomalías |
 
 ---
 
@@ -142,6 +214,8 @@ START
 
 **Anonimización antes de persistir:** protección de datos personales en el índice de largo plazo usando un pipeline en dos pasos: regex (RUT, email, dirección) + LLM (nombres y razones sociales).
 
+**Monitoreo integrado:** cada consulta y log se persiste en SQLite. El ETL diario computa métricas de precisión, consistencia y error. La detección de anomalías alerta sobre picos de error, outliers de latencia y tendencias negativas.
+
 ---
 
 ## Estructura de carpetas
@@ -151,6 +225,12 @@ START
 ├── vectorstore/       ← index.faiss + index.pkl  (generado por indexar.py)
 ├── casos/             ← casos.index + casos.pkl  (generado al cerrar sesión)
 ├── memos/             ← memorándums .docx generados
+├── data/              ← monitor.db (base de datos de monitoreo)
+├── pages/
+│   └── admin.py       ← Dashboard de observabilidad
+├── .streamlit/
+│   ├── config.toml
+│   └── secrets.toml   ← Contraseña admin (no versionado)
 ├── config.py
 ├── anonymizer.py
 ├── memory.py
@@ -158,8 +238,10 @@ START
 ├── graph.py
 ├── indexar.py
 ├── app.py
+├── monitor_db.py      ← Sistema de monitoreo (EP3)
+├── seed_data.py       ← Datos de prueba para monitoreo
 ├── requirements.txt
-└── .env               ← no versionado
+└── .env               ← Token de API (no versionado)
 ```
 
 ## Stack tecnológico
@@ -170,7 +252,8 @@ START
 | LangChain | 0.2+ | Abstracciones LLM, embeddings, FAISS |
 | GitHub Models (Azure AI Inference) | — | `gpt-4o-mini` + `text-embedding-3-small` |
 | FAISS | — | Vectorstore normativa y memoria de largo plazo |
-| Streamlit | — | Interfaz de usuario web |
+| Streamlit | — | Interfaz de usuario + dashboard de monitoreo |
+| SQLite | — | Base de datos de monitoreo (EP3) |
 | python-docx | — | Generación de memorándums Word |
 
 ---
@@ -178,8 +261,15 @@ START
 ## Pruebas
 
 ```bash
-pytest test_unit.py       # tests unitarios
-pytest test_queries.py    # validación de consultas de ejemplo
+pytest test_unit.py        # tests unitarios
+pytest test_admin.py       # tests del sistema de monitoreo (16 tests)
+pytest test_queries.py     # validación de consultas de ejemplo
+```
+
+Seed data para el dashboard:
+
+```bash
+python seed_data.py        # Pobla data/monitor.db con 105 consultas de prueba
 ```
 
 ---

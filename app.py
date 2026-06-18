@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ from utils import (
     parsear_respuesta,
     validar_consulta,
 )
+from monitor_db import get_monitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -144,6 +146,19 @@ st.sidebar.warning(
     "⚠️ Este asistente es orientativo. Las respuestas deben ser validadas "
     "por un contador o abogado tributario."
 )
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🔧 Administración**")
+st.sidebar.page_link("pages/admin.py", label="📊 Dashboard de monitoreo", icon="📊")
+
+# ETL inicial (una vez por sesión)
+if "etl_inicial" not in st.session_state:
+    try:
+        from monitor_db import get_monitor
+        get_monitor().etl_ejecutar()
+    except Exception:
+        pass
+    st.session_state.etl_inicial = True
 
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
@@ -309,6 +324,7 @@ with tab_ep2:
                 # Invocar el grafo
                 with st.chat_message("assistant"):
                     with st.spinner("Analizando normativa..."):
+                        t0 = time.time()
                         try:
                             grafo = cargar_grafo()
                             historial_lc = st.session_state.memoria_cp.obtener_historial()
@@ -329,17 +345,41 @@ with tab_ep2:
                             estado_final = grafo.invoke(estado_entrada)
                             respuesta = estado_final.get("respuesta", "No se pudo generar una respuesta.")
                             ruta_memo = estado_final.get("ruta_memo")
+                            evaluacion = estado_final.get("evaluacion", {})
+                            iteraciones = estado_final.get("iteraciones", 0)
+                            elapsed = (time.time() - t0) * 1000
+
+                            secciones = parsear_respuesta(respuesta)
 
                             st.markdown(respuesta)
                             if ruta_memo:
                                 st.success(f"📄 Memorándum generado: `{ruta_memo}`")
                                 st.session_state.ultima_ruta_memo = ruta_memo
 
+                            get_monitor().registrar_consulta(
+                                modo="EP2",
+                                consulta=consulta,
+                                respuesta=respuesta,
+                                tiene_analisis=bool(secciones.get("analisis")),
+                                tiene_articulos=bool(secciones.get("articulos")),
+                                tiene_limitaciones=bool(secciones.get("limitaciones")),
+                                iteraciones=iteraciones,
+                                confianza=evaluacion.get("confianza"),
+                                tiempo_ms=elapsed,
+                            )
+
                         except Exception as exc:
+                            elapsed = (time.time() - t0) * 1000
                             logger.error("Error en grafo: %s", exc)
                             st.error(f"❌ Error al procesar la consulta: {exc}")
                             respuesta = f"Error: {exc}"
                             ruta_memo = None
+                            get_monitor().registrar_consulta(
+                                modo="EP2",
+                                consulta=consulta,
+                                error=str(exc),
+                                tiempo_ms=elapsed,
+                            )
 
                 # Actualizar memoria de corto plazo
                 st.session_state.memoria_cp.agregar_turno(consulta, respuesta)
@@ -387,12 +427,14 @@ with tab_ep1:
 
             if consulta_ep1:
                 with st.spinner("Buscando en la normativa..."):
+                    t0 = time.time()
                     try:
                         chain = cargar_chain(k_docs, temperatura)
                         resultado = llamar_con_reintento(chain, consulta_ep1)
                         respuesta_raw = resultado["result"]
                         fuentes = resultado["source_documents"]
                         secciones = parsear_respuesta(respuesta_raw)
+                        elapsed = (time.time() - t0) * 1000
 
                         st.session_state.historial.append(
                             {
@@ -407,9 +449,29 @@ with tab_ep1:
                         logger.info("Consulta EP1 procesada con %d fragmentos.", len(fuentes))
                         st.success(f"✅ Procesada con {len(fuentes)} fragmentos relevantes")
 
+                        get_monitor().registrar_consulta(
+                            modo="EP1",
+                            consulta=consulta_ep1,
+                            respuesta=respuesta_raw,
+                            tiene_analisis=bool(secciones.get("analisis")),
+                            tiene_articulos=bool(secciones.get("articulos")),
+                            tiene_limitaciones=bool(secciones.get("limitaciones")),
+                            num_fuentes=len(fuentes),
+                            k_usado=k_docs,
+                            temperatura=temperatura,
+                            tiempo_ms=elapsed,
+                        )
+
                     except Exception as exc:
+                        elapsed = (time.time() - t0) * 1000
                         logger.error("Error EP1: %s", exc)
                         st.error(f"❌ Error al procesar la consulta: {exc}")
+                        get_monitor().registrar_consulta(
+                            modo="EP1",
+                            consulta=consulta_ep1,
+                            error=str(exc),
+                            tiempo_ms=elapsed,
+                        )
 
         if st.session_state.historial:
             ultimo = st.session_state.historial[-1]

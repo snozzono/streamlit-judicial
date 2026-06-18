@@ -24,6 +24,16 @@ docs/               # PDFs de normativa — demasiado pesados para el repo
 
 # vectorstore/ NO está ignorado — se sube al repo para Streamlit Cloud
 
+# ── Documentos de entrega (no subir al repo de código) ────────────────────────
+DEFENSA_EP2.md
+EP3_INFORME.md
+EP3_ISY0101_Estudiante.md
+RECOMENDACIONES_DISENO.md
+test_results.md
+
+# ── Secrets de Streamlit ──────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb
@@ -39,7 +49,6 @@ Thumbs.db
 # ── Archivos temporales ───────────────────────────────────────────────────────
 *.tmp
 *.log
-test_results.md
 
 # ── Legacy / descartados ──────────────────────────────────────────────────────
 drive/
