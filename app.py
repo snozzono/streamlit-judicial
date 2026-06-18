@@ -113,6 +113,42 @@ def cargar_memoria_lp():
     return get_memoria_largo_plazo()
 
 
+# ── WELCOME / ONBOARDING ──────────────────────────────────────────────────────
+
+if "welcome_dismissed" not in st.session_state:
+    st.session_state.welcome_dismissed = False
+
+if not st.session_state.welcome_dismissed:
+    with st.container():
+        col_w, _ = st.columns([3, 1])
+        with col_w:
+            st.markdown("""
+            <div style="background:linear-gradient(135deg,#1a237e,#283593);color:white;
+                        padding:2rem;border-radius:16px;margin-bottom:1.5rem;">
+                <h1 style="margin:0 0 0.5rem;font-size:1.8rem;">⚖️ Asistente Tributario</h1>
+                <p style="margin:0;opacity:0.9;font-size:1rem;">
+                    Bufete Ruiz Salazar · Consultas de normativa chilena
+                </p>
+                <hr style="border-color:rgba(255,255,255,0.2);margin:1rem 0;">
+                <p style="margin:0 0 0.3rem;">
+                    📌 <strong>EP2 — Conversacional:</strong> Chat con agente LangGraph.
+                    Hace búsquedas semánticas en DL-824, DL-825 y DL-830,
+                    razona con auto-evaluación y genera memorándums .docx.
+                </p>
+                <p style="margin:0 0 0.3rem;">
+                    📌 <strong>EP1 — Clásico:</strong> Consulta directa con control
+                    de k (fragmentos) y temperatura.
+                </p>
+                <p style="margin:0 0 0.3rem;">
+                    📌 <strong>Dashboard:</strong> Monitoreo de precisión,
+                    consistencia, latencia, errores y anomalías en
+                    <code style="background:rgba(255,255,255,0.15);padding:2px 6px;border-radius:4px;">/admin</code>.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        with _:
+            st.button("✕ Cerrar", on_click=lambda: setattr(st.session_state, "welcome_dismissed", True))
+
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Configuración")

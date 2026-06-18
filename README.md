@@ -23,14 +23,14 @@ Crea `.env` en la raíz:
 GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 ```
 
-Opcional — contraseña para el dashboard administrativo en `.streamlit/secrets.toml`:
+(Opcional) Contraseña para el dashboard administrativo en `.streamlit/secrets.toml`:
 
 ```toml
 [admin]
 password = "tu_contraseña"
 ```
 
-Si no se define, se usará la variable de entorno `ADMIN_PASSWORD`.
+Si no se define, el fallback es `ADMIN_PASSWORD` de entorno o `admin123` para desarrollo/pruebas.
 
 ## Indexación (solo la primera vez)
 

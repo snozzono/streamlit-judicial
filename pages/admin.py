@@ -48,7 +48,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password") or os.getenv("ADMIN_PASSWORD", "")
+ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password") or os.getenv("ADMIN_PASSWORD", "admin123")
 
 
 def autenticar() -> bool:
