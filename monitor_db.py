@@ -71,6 +71,7 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS consultas (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp       TEXT    NOT NULL,
+    session_id      TEXT,
     modo            TEXT    NOT NULL,
     consulta        TEXT    NOT NULL,
     respuesta       TEXT,
@@ -88,12 +89,14 @@ CREATE TABLE IF NOT EXISTS consultas (
     tokens_output   INTEGER DEFAULT 0,
     tokens_total    INTEGER DEFAULT 0,
     costo_estimado  REAL    DEFAULT 0,
+    cache_hit       INTEGER DEFAULT 0,
     created_at      TEXT    DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS logs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp  TEXT    NOT NULL,
+    session_id TEXT,
     nivel      TEXT    NOT NULL,
     modulo     TEXT,
     mensaje    TEXT    NOT NULL,
@@ -133,6 +136,9 @@ def inicializar_db():
         ("consultas", "tokens_output", "INTEGER DEFAULT 0"),
         ("consultas", "tokens_total", "INTEGER DEFAULT 0"),
         ("consultas", "costo_estimado", "REAL DEFAULT 0"),
+        ("consultas", "cache_hit", "INTEGER DEFAULT 0"),
+        ("consultas", "session_id", "TEXT"),
+        ("logs", "session_id", "TEXT"),
         ("metricas_diarias", "tokens_input_total", "INTEGER DEFAULT 0"),
         ("metricas_diarias", "tokens_output_total", "INTEGER DEFAULT 0"),
         ("metricas_diarias", "tokens_total", "INTEGER DEFAULT 0"),
@@ -162,6 +168,7 @@ class Monitor:
     def registrar_consulta(
         self,
         *,
+        session_id: Optional[str] = None,
         modo: str,
         consulta: str,
         respuesta: str = "",
@@ -178,20 +185,22 @@ class Monitor:
         tokens_input: int = 0,
         tokens_output: int = 0,
         costo_estimado: float = 0.0,
+        cache_hit: bool = False,
     ) -> int:
         tokens_total = tokens_input + tokens_output
         conn = _get_conn()
         try:
             cur = conn.execute(
                 """INSERT INTO consultas
-                   (timestamp, modo, consulta, respuesta,
+                   (timestamp, session_id, modo, consulta, respuesta,
                     tiene_analisis, tiene_articulos, tiene_limitaciones,
                     num_fuentes, k_usado, temperatura, iteraciones,
                     confianza, error, tiempo_ms,
-                    tokens_input, tokens_output, tokens_total, costo_estimado)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tokens_input, tokens_output, tokens_total, costo_estimado, cache_hit)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     _ahora(),
+                    session_id,
                     modo,
                     consulta[:1000],
                     respuesta[:5000] if respuesta else "",
@@ -209,6 +218,7 @@ class Monitor:
                     tokens_output,
                     tokens_total,
                     costo_estimado,
+                    int(cache_hit),
                 ),
             )
             conn.commit()
@@ -218,12 +228,12 @@ class Monitor:
 
     # ── Logs ─────────────────────────────────────────────────────────────
 
-    def registrar_log(self, nivel: str, modulo: str, mensaje: str):
+    def registrar_log(self, nivel: str, modulo: str, mensaje: str, session_id: Optional[str] = None):
         conn = _get_conn()
         try:
             conn.execute(
-                "INSERT INTO logs (timestamp, nivel, modulo, mensaje) VALUES (?, ?, ?, ?)",
-                (_ahora(), nivel.upper(), modulo[:100], mensaje[:2000]),
+                "INSERT INTO logs (timestamp, session_id, nivel, modulo, mensaje) VALUES (?, ?, ?, ?, ?)",
+                (_ahora(), session_id, nivel.upper(), modulo[:100], mensaje[:2000]),
             )
             conn.commit()
         finally:
@@ -599,6 +609,87 @@ class Monitor:
             return recomendaciones
         finally:
             conn.close()
+
+    # ── Alertas Automáticas ──────────────────────────────────────────────
+
+    def verificar_alertas(self) -> list[dict]:
+        """
+        Verifica umbrales automáticos y retorna alertas activas.
+
+        Alertas:
+        - Error rate > CONFIG.alert_error_threshold en el último día
+        - Latencia > CONFIG.alert_latency_threshold en consultas recientes
+        - Precisión < 40% en el último día
+        """
+        alertas = []
+        conn = _get_conn()
+        try:
+            # Alerta de tasa de error
+            hoy = _hoy()
+            row_hoy = conn.execute(
+                "SELECT * FROM metricas_diarias WHERE fecha = ?", (hoy,)
+            ).fetchone()
+            if row_hoy and row_hoy["error_rate_pct"] is not None:
+                if row_hoy["error_rate_pct"] > CONFIG.alert_error_threshold:
+                    alertas.append({
+                        "tipo": "error_rate",
+                        "severidad": "alta",
+                        "mensaje": (
+                            f"Tasa de error crítica: {row_hoy['error_rate_pct']}% "
+                            f"(umbral: {CONFIG.alert_error_threshold}%)"
+                        ),
+                        "fecha": hoy,
+                    })
+
+                if row_hoy["precision_pct"] is not None and row_hoy["precision_pct"] < 40:
+                    alertas.append({
+                        "tipo": "precision",
+                        "severidad": "media",
+                        "mensaje": (
+                            f"Precisión baja: {row_hoy['precision_pct']}% "
+                            "(umbral: 40%)"
+                        ),
+                        "fecha": hoy,
+                    })
+
+            # Alerta de latencia (últimas 20 consultas)
+            recent = conn.execute(
+                "SELECT id, timestamp, tiempo_ms, consulta FROM consultas "
+                "WHERE tiempo_ms IS NOT NULL ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            for r in recent:
+                if r["tiempo_ms"] > CONFIG.alert_latency_threshold:
+                    alertas.append({
+                        "tipo": "latencia",
+                        "severidad": "media",
+                        "mensaje": (
+                            f"Latencia alta: {r['tiempo_ms']:.0f}ms en consulta "
+                            f"#{r['id']} (umbral: {CONFIG.alert_latency_threshold}ms)"
+                        ),
+                        "fecha": r["timestamp"][:10],
+                        "consulta_id": r["id"],
+                    })
+
+            # Alerta de cola de errores consecutivos
+            ultimos_10 = conn.execute(
+                "SELECT error FROM consultas ORDER BY id DESC LIMIT 10"
+            ).fetchall()
+            errores_seguidos = sum(1 for r in ultimos_10 if r["error"] is not None)
+            if errores_seguidos >= 5:
+                alertas.append({
+                    "tipo": "error_sequence",
+                    "severidad": "alta",
+                    "mensaje": (
+                        f"{errores_seguidos}/10 últimas consultas con error. "
+                        "Posible falla sistémica."
+                    ),
+                    "fecha": hoy,
+                })
+
+        finally:
+            conn.close()
+
+        return alertas
 
     # ── Trend Analysis ───────────────────────────────────────────────────
 

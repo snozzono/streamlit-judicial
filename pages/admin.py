@@ -197,9 +197,22 @@ if "tokens_total" in (ultimas_m or {}):
 
 st.markdown("---")
 
-tab_metricas, tab_consultas, tab_logs, tab_errores, tab_anomalias = st.tabs(
-    ["📈 Métricas históricas", "📋 Consultas", "📝 Logs", "❌ Errores", "🔍 Anomalías"]
-)
+try:
+    alertas = monitor.verificar_alertas()
+    num_alertas = len(alertas)
+except Exception:
+    alertas = []
+    num_alertas = 0
+
+tab_names = [
+    "📈 Métricas históricas",
+    "📋 Consultas",
+    "📝 Logs",
+    "❌ Errores",
+    "🔍 Anomalías",
+    f"🚨 Alertas ({num_alertas})" if num_alertas else "🚨 Alertas",
+]
+tab_metricas, tab_consultas, tab_logs, tab_errores, tab_anomalias, tab_alertas = st.tabs(tab_names)
 
 # ═══════════════════════════════════════════════
 # TAB: Métricas
@@ -408,3 +421,29 @@ with tab_anomalias:
                 st.info("No hay recomendaciones.")
         except Exception:
             st.info("No hay recomendaciones.")
+
+# ═══════════════════════════════════════════════
+# TAB: Alertas Automáticas
+# ═══════════════════════════════════════════════
+
+with tab_alertas:
+    try:
+        alertas = monitor.verificar_alertas()
+    except Exception:
+        alertas = []
+
+    if not alertas:
+        st.success("✅ Sin alertas activas. El sistema opera dentro de parámetros normales.")
+    else:
+        st.subheader(f"🚨 {len(alertas)} alerta(s) activa(s)")
+        for a in alertas:
+            sev = a.get("severidad", "baja")
+            icon = {"alta": "🔴", "media": "🟡", "baja": "🟢"}.get(sev, "⚪")
+            with st.expander(f"{icon} [{sev.upper()}] {a.get('tipo', 'desconocido')} — {a.get('fecha', '?')}"):
+                st.markdown(f"**{a.get('mensaje', '')}**")
+                if a.get("consulta_id"):
+                    st.caption(f"Consulta ID: {a['consulta_id']}")
+                st.caption(f"Severidad: {sev}")
+
+        st.markdown("---")
+        st.caption("Las alertas se generan automáticamente según umbrales configurados en config.py")

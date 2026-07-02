@@ -31,6 +31,7 @@ EP3_ISY0101_Estudiante.md
 RECOMENDACIONES_DISENO.md
 test_results.md
 
+
 # ── Secrets de Streamlit ──────────────────────────────────────────────────────
 .streamlit/secrets.toml
 
@@ -52,5 +53,6 @@ Thumbs.db
 
 # ── Legacy / descartados ──────────────────────────────────────────────────────
 drive/
+informes/
 pendientes.txt
 contexto.txt

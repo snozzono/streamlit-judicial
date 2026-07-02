@@ -14,6 +14,7 @@ Topología:
 Función pública: crear_grafo() → CompiledGraph
 """
 
+import logging
 import os
 from operator import add
 from typing import Annotated, Optional
@@ -26,6 +27,8 @@ from typing_extensions import TypedDict
 
 import tools as tool_fns
 from config import CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +74,9 @@ def nodo_classifier(state: EstadoAgente) -> dict:
 
 
 def nodo_buscar_normativa(state: EstadoAgente) -> dict:
-    """Recupera fragmentos del vectorstore de normativa tributaria."""
-    chunks = tool_fns.buscar_normativa(state["consulta"], k=CONFIG.k_default)
+    """Recupera fragmentos del vectorstore de normativa tributaria.
+    Usa K dinámico según complejidad de la consulta."""
+    chunks = tool_fns.buscar_normativa(state["consulta"])
     return {"chunks_normativa": chunks}
 
 
@@ -116,7 +120,10 @@ def nodo_razonador(state: EstadoAgente) -> dict:
         "Nueva consulta de búsqueda refinada:"
     )
 
-    resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    resp = tool_fns.llamar_con_reintento(
+        llm.invoke,
+        [SystemMessage(content=system), HumanMessage(content=user)],
+    )
     consulta_refinada = resp.content.strip()
 
     # Búsqueda adicional con la consulta refinada
@@ -171,7 +178,10 @@ def nodo_responder(state: EstadoAgente) -> dict:
         "Respuesta:"
     )
 
-    resp = llm.invoke([SystemMessage(content=_SYSTEM_RESPONDER), HumanMessage(content=user)])
+    resp = tool_fns.llamar_con_reintento(
+        llm.invoke,
+        [SystemMessage(content=_SYSTEM_RESPONDER), HumanMessage(content=user)],
+    )
     return {"respuesta": resp.content}
 
 
@@ -188,7 +198,10 @@ def nodo_redactar_memo(state: EstadoAgente) -> dict:
         f"Contexto normativo:\n{state['contexto_acumulado'][:3000]}\n\n"
         "Redacta el análisis completo:"
     )
-    resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    resp = tool_fns.llamar_con_reintento(
+        llm.invoke,
+        [SystemMessage(content=system), HumanMessage(content=user)],
+    )
     analisis = resp.content
 
     ruta = tool_fns.redactar_memo(

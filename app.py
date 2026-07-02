@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+import uuid
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -21,6 +22,7 @@ from utils import (
     validar_consulta,
 )
 from monitor_db import get_monitor
+from cache import get_cache
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,6 +41,11 @@ st.set_page_config(
     page_icon="⚖️",
     layout="wide",
 )
+
+# ── Session ID único (traza EP3) ─────────────────────────────────────────────
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())[:8]
 
 
 # ── RECURSOS CACHEADOS ────────────────────────────────────────────────────────
@@ -357,33 +364,52 @@ with tab_ep2:
                 with st.chat_message("user"):
                     st.markdown(consulta)
 
+                # Verificar caché antes de invocar grafo
+                cache = get_cache()
+                respuesta_cache = cache.obtener(consulta)
+                cache_hit = respuesta_cache is not None
+
                 # Invocar el grafo
                 with st.chat_message("assistant"):
                     with st.spinner("Analizando normativa..."):
                         t0 = time.time()
                         try:
-                            grafo = cargar_grafo()
-                            historial_lc = st.session_state.memoria_cp.obtener_historial()
+                            if cache_hit:
+                                respuesta = respuesta_cache
+                                ruta_memo = None
+                                evaluacion = {}
+                                iteraciones = 0
+                                elapsed = (time.time() - t0) * 1000
+                                st.info("⚡ Respuesta desde caché")
+                            else:
+                                grafo = cargar_grafo()
+                                historial_lc = st.session_state.memoria_cp.obtener_historial()
 
-                            estado_entrada = {
-                                "consulta": consulta,
-                                "historial_mensajes": historial_lc,
-                                "chunks_normativa": [],
-                                "casos_similares": [],
-                                "contexto_acumulado": "",
-                                "evaluacion": {},
-                                "iteraciones": 0,
-                                "modo": "responder",
-                                "respuesta": "",
-                                "ruta_memo": None,
-                            }
+                                estado_entrada = {
+                                    "consulta": consulta,
+                                    "historial_mensajes": historial_lc,
+                                    "chunks_normativa": [],
+                                    "casos_similares": [],
+                                    "contexto_acumulado": "",
+                                    "evaluacion": {},
+                                    "iteraciones": 0,
+                                    "modo": "responder",
+                                    "respuesta": "",
+                                    "ruta_memo": None,
+                                }
 
-                            estado_final = grafo.invoke(estado_entrada)
-                            respuesta = estado_final.get("respuesta", "No se pudo generar una respuesta.")
-                            ruta_memo = estado_final.get("ruta_memo")
-                            evaluacion = estado_final.get("evaluacion", {})
-                            iteraciones = estado_final.get("iteraciones", 0)
-                            elapsed = (time.time() - t0) * 1000
+                                estado_final = grafo.invoke(estado_entrada)
+                                respuesta = estado_final.get("respuesta", "No se pudo generar una respuesta.")
+                                ruta_memo = estado_final.get("ruta_memo")
+                                evaluacion = estado_final.get("evaluacion", {})
+                                iteraciones = estado_final.get("iteraciones", 0)
+                                elapsed = (time.time() - t0) * 1000
+
+                                # Guardar en caché
+                                try:
+                                    cache.guardar(consulta, respuesta)
+                                except Exception:
+                                    pass
 
                             secciones = parsear_respuesta(respuesta)
 
@@ -393,6 +419,7 @@ with tab_ep2:
                                 st.session_state.ultima_ruta_memo = ruta_memo
 
                             get_monitor().registrar_consulta(
+                                session_id=st.session_state.session_id,
                                 modo="EP2",
                                 consulta=consulta,
                                 respuesta=respuesta,
@@ -402,6 +429,7 @@ with tab_ep2:
                                 iteraciones=iteraciones,
                                 confianza=evaluacion.get("confianza"),
                                 tiempo_ms=elapsed,
+                                cache_hit=cache_hit,
                             )
 
                         except Exception as exc:
@@ -411,6 +439,7 @@ with tab_ep2:
                             respuesta = f"Error: {exc}"
                             ruta_memo = None
                             get_monitor().registrar_consulta(
+                                session_id=st.session_state.session_id,
                                 modo="EP2",
                                 consulta=consulta,
                                 error=str(exc),
@@ -486,6 +515,7 @@ with tab_ep1:
                         st.success(f"✅ Procesada con {len(fuentes)} fragmentos relevantes")
 
                         get_monitor().registrar_consulta(
+                            session_id=st.session_state.session_id,
                             modo="EP1",
                             consulta=consulta_ep1,
                             respuesta=respuesta_raw,
@@ -503,6 +533,7 @@ with tab_ep1:
                         logger.error("Error EP1: %s", exc)
                         st.error(f"❌ Error al procesar la consulta: {exc}")
                         get_monitor().registrar_consulta(
+                            session_id=st.session_state.session_id,
                             modo="EP1",
                             consulta=consulta_ep1,
                             error=str(exc),

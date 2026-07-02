@@ -3,7 +3,7 @@ import time
 
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from openai import RateLimitError
+from openai import RateLimitError, APITimeoutError, APIError, APIConnectionError
 
 from config import CONFIG
 
@@ -102,14 +102,24 @@ def validar_consulta(texto: str) -> str:
     return texto
 
 
-def llamar_con_reintento(chain, consulta: str, max_intentos: int = 3) -> dict:
+def llamar_con_reintento(chain, consulta: str, max_intentos: int = None) -> dict:
+    """
+    Ejecuta chain.invoke con reintento ante errores de API.
+
+    Maneja: RateLimitError, APITimeoutError, APIConnectionError, APIError.
+    """
+    max_intentos = max_intentos or CONFIG.retry_max_attempts
     for intento in range(max_intentos):
         try:
             return chain.invoke({"query": consulta})
-        except RateLimitError:
+        except (RateLimitError, APITimeoutError, APIConnectionError, APIError) as exc:
             if intento < max_intentos - 1:
-                espera = 2 ** intento
-                logger.warning("Rate limit alcanzado. Reintentando en %ds...", espera)
+                espera = CONFIG.retry_initial_delay * (CONFIG.retry_backoff_factor ** intento)
+                logger.warning(
+                    "%s en intento %d/%d. Reintentando en %.1fs...",
+                    type(exc).__name__, intento + 1, max_intentos, espera,
+                )
                 time.sleep(espera)
             else:
+                logger.error("Todos los reintentos fallaron: %s", exc)
                 raise

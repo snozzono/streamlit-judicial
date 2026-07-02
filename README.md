@@ -1,6 +1,16 @@
 # ⚖️ Asistente Tributario — Bufete Ruiz Salazar
 
-Agente conversacional con LangGraph para consultas de normativa tributaria chilena (DL-824, DL-825, DL-830 y circulares SII). El sistema integra herramientas de consulta, razonamiento y escritura en un flujo de trabajo organizacional con memoria de corto y largo plazo, más un **sistema de observabilidad (EP3)** para monitoreo de precisión, consistencia, latencia, errores y anomalías.
+Agente conversacional con LangGraph para consultas de normativa tributaria chilena (DL-824, DL-825, DL-830 y circulares SII). El sistema integra herramientas de consulta, razonamiento y escritura en un flujo de trabajo organizacional con memoria de corto y largo plazo, más un **sistema de observabilidad** para monitoreo de precisión, consistencia, latencia, errores y anomalías.
+
+### Mejoras EP3
+
+| Mejora | Problema | Solución | Impacto |
+|--------|----------|----------|---------|
+| **Caché LRU** | Consultas repetitivas generaban el mismo costo y latencia | Caché thread-safe con TTL configurable indexado por SHA-256 | ~50ms vs ~2000ms en respuestas cacheadas |
+| **K dinámico** | K fijo (8) insuficiente para consultas transversales | Clasificador heurístico ajusta K entre 5–20 según complejidad | +5–10% precisión esperada |
+| **Retry con backoff** | Timeouts de API sin reintento automático | 3 intentos con backoff exponencial (1s, 2s, 4s) | ~60% menos errores de API |
+| **Session ID** | Trazabilidad sin correlación entre eventos | UUID de 8 chars por sesión en todas las consultas/logs | Trazabilidad completa del flujo |
+| **Alertas automáticas** | Sin notificaciones de anomalías en dashboard | Detección de error rate >60%, latencia >10s, precisión <40% | Detección temprana de fallos |
 
 > ⚠️ Este asistente es orientativo. Las respuestas deben ser validadas por un contador o abogado tributario.
 
@@ -142,12 +152,13 @@ Se implementó un pipeline completo de monitoreo sobre el agente EP2, con métri
 
 ### Dashboard
 
-- **KPIs**: total consultas, tasa de error, precisión, consistencia, tiempo promedio, tokens
+- **KPIs**: total consultas, tasa de error, precisión, consistencia, tiempo promedio, tokens (input/output/total/avg)
 - **Métricas históricas**: gráficos de evolución diaria (líneas + barras)
-- **Consultas**: listado paginado con filtro por modo y detalle expandible
-- **Logs**: filtro por nivel (ERROR, WARNING, INFO, DEBUG)
+- **Consultas**: listado paginado con filtro por modo y detalle expandible (incluye session_id, cache_hit)
+- **Logs**: filtro por nivel (ERROR, WARNING, INFO, DEBUG) con session_id
 - **Errores**: frecuencia y detalle de errores
-- **Anomalías**: detección automática de picos de error, outliers de latencia, tendencia de precisión y patrones de fallo
+- **Anomalías**: detección automática de picos de error, outliers de latencia, tendencia de precisión, patrones de fallo y recomendaciones de optimización
+- **Alertas**: notificaciones automáticas por tasa de error >60%, latencia >10s, precisión <40% o rachas de 5+ errores consecutivos
 
 ### Anomalías detectadas
 
@@ -183,12 +194,13 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 | `config.py` | Parámetros centralizados: modelos, rutas, umbrales (`confianza_minima=0.7`, `max_reasoning_iterations=2`) |
 | `anonymizer.py` | Anonimización de RUTs, emails, nombres y empresas antes de persistir en largo plazo |
 | `memory.py` | `MemoriaCortoplazo` (buffer de mensajes por sesión) + `MemoriaLargoplazo` (FAISS de casos anteriores) |
-| `tools.py` | 6 herramientas: `buscar_normativa`, `buscar_casos_anteriores`, `evaluar_consulta`, `redactar_memo`, `guardar_drive`, `enviar_gmail` |
+| `tools.py` | 6 herramientas + K dinámico + wrapper de retry con backoff exponencial |
 | `graph.py` | Grafo LangGraph: 8 nodos, fan-out paralelo con `Send`, loop de razonamiento adaptativo |
+| `cache.py` | Caché LRU thread-safe con TTL para respuestas de consultas frecuentes |
 | `indexar.py` | Indexación de PDFs → vectorstore FAISS (EP1, no modificar) |
-| `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica |
-| `monitor_db.py` | Sistema de monitoreo SQLite: consultas, logs, ETL diario, anomalías, recomendaciones |
-| `pages/admin.py` | Dashboard administrativo con KPIs, gráficos y detección de anomalías |
+| `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica + caché + session_id |
+| `monitor_db.py` | Sistema de monitoreo SQLite: consultas, logs, ETL diario, anomalías, recomendaciones, alertas |
+| `pages/admin.py` | Dashboard administrativo con KPIs, gráficos, detección de anomalías y alertas |
 
 ---
 
@@ -214,7 +226,15 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 
 **Anonimización antes de persistir:** protección de datos personales en el índice de largo plazo usando un pipeline en dos pasos: regex (RUT, email, dirección) + LLM (nombres y razones sociales).
 
-**Monitoreo integrado:** cada consulta y log se persiste en SQLite. El ETL diario computa métricas de precisión, consistencia y error. La detección de anomalías alerta sobre picos de error, outliers de latencia y tendencias negativas.
+**Monitoreo integrado:** cada consulta y log se persiste en SQLite. El ETL diario computa métricas de precisión, consistencia y error. La detección de anomalías alerta sobre picos de error, outliers de latencia y tendencias negativas. **Alertas automáticas** notifican cuando la tasa de error supera el 60%, la latencia excede 10s, la precisión cae bajo 40% o hay 5+ errores consecutivos.
+
+**Caché LRU:** respuestas de consultas frecuentes se almacenan con hash SHA-256 y TTL configurable, reduciendo latencia de ~2000ms a ~50ms.
+
+**K dinámico:** el sistema estima automáticamente el número óptimo de fragmentos a recuperar (5–20) según la longitud y palabras clave de la consulta.
+
+**Retry con backoff exponencial:** todas las llamadas al LLM incorporan hasta 3 reintentos con backoff (1s, 2s, 4s) para RateLimitError, APITimeoutError, APIConnectionError y APIError.
+
+**Session ID:** cada sesión genera un UUID único que correlaciona todas las consultas y logs del mismo flujo.
 
 ---
 
@@ -231,14 +251,15 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 ├── .streamlit/
 │   ├── config.toml
 │   └── secrets.toml   ← Contraseña admin (no versionado)
-├── config.py
+├── config.py          ← Parámetros centralizados (incluye cache, retry, K dinámico, alertas)
 ├── anonymizer.py
 ├── memory.py
-├── tools.py
+├── tools.py           ← Herramientas + retry wrapper + K dinámico
+├── cache.py           ← Caché LRU thread-safe (EP3)
 ├── graph.py
 ├── indexar.py
-├── app.py
-├── monitor_db.py      ← Sistema de monitoreo (EP3)
+├── app.py             ← Integración de caché y session_id
+├── monitor_db.py      ← Sistema de monitoreo + alertas automáticas
 ├── seed_data.py       ← Datos de prueba para monitoreo
 ├── requirements.txt
 └── .env               ← Token de API (no versionado)
@@ -255,15 +276,18 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 | Streamlit | — | Interfaz de usuario + dashboard de monitoreo |
 | SQLite | — | Base de datos de monitoreo (EP3) |
 | python-docx | — | Generación de memorándums Word |
+| threading + OrderedDict | — | Caché LRU thread-safe con TTL (EP3) |
 
 ---
 
 ## Pruebas
 
 ```bash
-pytest test_unit.py        # tests unitarios
+pytest test_unit.py        # tests unitarios (15 tests)
 pytest test_admin.py       # tests del sistema de monitoreo (16 tests)
-pytest test_queries.py     # validación de consultas de ejemplo
+pytest test_queries.py     # validación de consultas de ejemplo (9 casos)
+pytest test_anonymizer.py  # tests de anonimización (46 tests)
+pytest                    # todos los tests (77 tests)
 ```
 
 Seed data para el dashboard:

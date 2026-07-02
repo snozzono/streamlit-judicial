@@ -12,7 +12,9 @@ Seis funciones que el grafo LangGraph invoca como nodos o directamente:
 
 import importlib
 import json
+import logging
 import os
+import time
 from datetime import datetime
 
 from langchain_community.vectorstores import FAISS
@@ -22,6 +24,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from config import CONFIG
 from memory import get_memoria_largo_plazo
+
+logger = logging.getLogger(__name__)
 
 
 def _api_key() -> str:
@@ -46,11 +50,108 @@ def _get_embeddings() -> OpenAIEmbeddings:
 
 
 # ---------------------------------------------------------------------------
+# Retry wrapper con backoff exponencial
+# ---------------------------------------------------------------------------
+
+def llamar_con_reintento(llm_func, *args, max_attempts: int = None, **kwargs):
+    """
+    Envuelve llamadas a LLM con reintento automático y backoff exponencial.
+
+    Args:
+        llm_func: función a llamar (ej. llm.invoke)
+        max_attempts: máximo de intentos (default CONFIG.retry_max_attempts)
+
+    Returns:
+        resultado de llm_func
+
+    Raises:
+        última excepción después de agotar intentos
+    """
+    max_attempts = max_attempts or CONFIG.retry_max_attempts
+    last_error = None
+    for intento in range(1, max_attempts + 1):
+        try:
+            return llm_func(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            error_name = type(e).__name__
+            if intento < max_attempts:
+                delay = CONFIG.retry_initial_delay * (CONFIG.retry_backoff_factor ** (intento - 1))
+                logger.warning(
+                    f"Intento {intento}/{max_attempts} falló ({error_name}): {e}. "
+                    f"Reintentando en {delay:.1f}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    f"Intento {intento}/{max_attempts} falló ({error_name}): {e}. "
+                    "Sin reintentos restantes."
+                )
+    raise last_error
+
+
+# ---------------------------------------------------------------------------
+# Clasificador de complejidad para K dinámico
+# ---------------------------------------------------------------------------
+
+def estimar_k_optimo(consulta: str) -> int:
+    """
+    Estima el valor óptimo de K según la complejidad de la consulta.
+
+    Consultas cortas/específicas → K bajo (5-8)
+    Consultas largas/complejas  → K alto (10-20)
+
+    Returns:
+        entero entre CONFIG.k_min y CONFIG.k_max
+    """
+    longitud = len(consulta)
+    palabras_clave_complejas = [
+        "comparar", "diferencia", "relación", "versus", "vs",
+        "todos", "cada", "complete", "detalle", "exhaustivo",
+        "transversal", "integral", "marco", "general",
+    ]
+    palabras_clave_especificas = [
+        "artículo", "art.", "circular", "resolución",
+        "número", "num", "literal", "inciso",
+    ]
+
+    # Base según longitud
+    if longitud < 50:
+        k_base = CONFIG.k_min
+    elif longitud < 150:
+        k_base = CONFIG.k_default_dynamic
+    else:
+        k_base = CONFIG.k_min + 5
+
+    consulta_lower = consulta.lower()
+
+    # Penalizar por palabras clave complejas
+    for kw in palabras_clave_complejas:
+        if kw in consulta_lower:
+            k_base += 3
+            break
+
+    # Reducir por palabras clave específicas
+    for kw in palabras_clave_especificas:
+        if kw in consulta_lower:
+            k_base -= 1
+            break
+
+    return max(CONFIG.k_min, min(CONFIG.k_max, k_base))
+
+
+# ---------------------------------------------------------------------------
 # 1. buscar_normativa
 # ---------------------------------------------------------------------------
 
-def buscar_normativa(query: str, k: int = 5) -> list[Document]:
-    """Busca los k fragmentos más relevantes en el vectorstore de normativa."""
+def buscar_normativa(query: str, k: int = None) -> list[Document]:
+    """
+    Busca los k fragmentos más relevantes en el vectorstore de normativa.
+    
+    Si k no se especifica, usa estimación dinámica según la consulta.
+    """
+    if k is None:
+        k = estimar_k_optimo(query)
     try:
         embeddings = _get_embeddings()
         vs = FAISS.load_local(
@@ -58,9 +159,11 @@ def buscar_normativa(query: str, k: int = 5) -> list[Document]:
             embeddings,
             allow_dangerous_deserialization=True,
         )
-        return vs.similarity_search(query, k=k)
+        docs = vs.similarity_search(query, k=k)
+        logger.info(f"[tools] buscar_normativa: k={k}, docs={len(docs)} para query='{query[:60]}...'")
+        return docs
     except Exception as e:
-        print(f"[tools] buscar_normativa: {e}")
+        logger.error(f"[tools] buscar_normativa: {e}")
         return []
 
 
@@ -94,6 +197,18 @@ def evaluar_consulta(consulta: str, contexto: str) -> dict:
     Returns:
         dict con claves: cubierta (bool), confianza (float), accion_sugerida (str)
     """
+    from cache import get_cache
+    cache = get_cache()
+    
+    # Intentar desde caché
+    cache_key = f"eval:{consulta.strip().lower()}"
+    cached = cache.obtener(cache_key)
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
+
     llm = _get_llm()
     user_msg = (
         f"Consulta: {consulta}\n\n"
@@ -101,11 +216,22 @@ def evaluar_consulta(consulta: str, contexto: str) -> dict:
         "Evalúa y responde en JSON."
     )
     try:
-        resp = llm.invoke([SystemMessage(content=_SYSTEM_EVAL), HumanMessage(content=user_msg)])
+        resp = llamar_con_reintento(
+            llm.invoke,
+            [SystemMessage(content=_SYSTEM_EVAL), HumanMessage(content=user_msg)],
+        )
         contenido = resp.content.strip().removeprefix("```json").removesuffix("```").strip()
-        return json.loads(contenido)
+        resultado = json.loads(contenido)
+
+        # Guardar en caché
+        try:
+            cache.guardar(cache_key, json.dumps(resultado))
+        except Exception:
+            pass
+
+        return resultado
     except Exception as e:
-        print(f"[tools] evaluar_consulta: {e}")
+        logger.error(f"[tools] evaluar_consulta: {e}")
         return {"cubierta": True, "confianza": 0.8, "accion_sugerida": "responder"}
 
 

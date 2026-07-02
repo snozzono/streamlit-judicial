@@ -33,6 +33,24 @@ class Config:
     # --- Anonimización ---
     entidades_sensibles: tuple = ("RUT", "NOMBRE", "EMPRESA", "DIRECCION", "EMAIL")
 
+    # --- Cache (EP3) ---
+    cache_maxsize: int = 100
+    cache_ttl_minutes: int = 60
+
+    # --- Retry (EP3) ---
+    retry_max_attempts: int = 3
+    retry_initial_delay: float = 1.0
+    retry_backoff_factor: float = 2.0
+
+    # --- K dinámico (EP3) ---
+    k_min: int = 5
+    k_max: int = 20
+    k_default_dynamic: int = 8
+
+    # --- Alertas (EP3) ---
+    alert_error_threshold: float = 60.0       # % para pico de error
+    alert_latency_threshold: float = 10000.0  # ms para outlier
+
 
 CONFIG = Config()
 
