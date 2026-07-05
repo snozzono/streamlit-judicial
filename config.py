@@ -50,6 +50,7 @@ class Config:
     # --- Alertas (EP3) ---
     alert_error_threshold: float = 60.0       # % para pico de error
     alert_latency_threshold: float = 10000.0  # ms para outlier
+    alert_precision_threshold: float = 40.0   # % mínimo de precisión antes de alertar
 
 
 CONFIG = Config()

@@ -13,11 +13,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from config import CONFIG, VECTORSTORE_FILES
 from graph import crear_grafo
 from memory import get_memoria_largo_plazo, nueva_sesion
+from tools import estimar_k_optimo, llamar_con_reintento
 from utils import (
     get_embeddings,
     get_llm,
     get_prompt_template,
-    llamar_con_reintento,
     parsear_respuesta,
     validar_consulta,
 )
@@ -94,23 +94,6 @@ def cargar_vectorstore():
 
 
 @st.cache_resource
-def cargar_chain(k: int, temperature: float) -> RetrievalQA:
-    vectorstore = cargar_vectorstore()
-    llm = get_llm(API_KEY, temperature)
-    retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": k},
-    )
-    return RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={"prompt": get_prompt_template()},
-        return_source_documents=True,
-    )
-
-
-@st.cache_resource
 def cargar_grafo():
     return crear_grafo()
 
@@ -120,53 +103,36 @@ def cargar_memoria_lp():
     return get_memoria_largo_plazo()
 
 
-# ── WELCOME / ONBOARDING ──────────────────────────────────────────────────────
+# ── BLOQUE INFORMATIVO ────────────────────────────────────────────────────────
 
-if "welcome_dismissed" not in st.session_state:
-    st.session_state.welcome_dismissed = False
-
-if not st.session_state.welcome_dismissed:
-    with st.container():
-        col_w, _ = st.columns([3, 1])
-        with col_w:
-            st.markdown("""
-            <div style="background:linear-gradient(135deg,#1a237e,#283593);color:white;
-                        padding:2rem;border-radius:16px;margin-bottom:1.5rem;">
-                <h1 style="margin:0 0 0.5rem;font-size:1.8rem;">⚖️ Asistente Tributario</h1>
-                <p style="margin:0;opacity:0.9;font-size:1rem;">
-                    Bufete Ruiz Salazar · Consultas de normativa chilena
-                </p>
-                <hr style="border-color:rgba(255,255,255,0.2);margin:1rem 0;">
-                <p style="margin:0 0 0.3rem;">
-                    📌 <strong>EP2 — Conversacional:</strong> Chat con agente LangGraph.
-                    Hace búsquedas semánticas en DL-824, DL-825 y DL-830,
-                    razona con auto-evaluación y genera memorándums .docx.
-                </p>
-                <p style="margin:0 0 0.3rem;">
-                    📌 <strong>EP1 — Clásico:</strong> Consulta directa con control
-                    de k (fragmentos) y temperatura.
-                </p>
-                <p style="margin:0 0 0.3rem;">
-                    📌 <strong>Dashboard:</strong> Monitoreo de precisión,
-                    consistencia, latencia, errores y anomalías en
-                    <code style="background:rgba(255,255,255,0.15);padding:2px 6px;border-radius:4px;">/admin</code>.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        with _:
-            st.button("✕ Cerrar", on_click=lambda: setattr(st.session_state, "welcome_dismissed", True))
+st.markdown("""
+<div style="background:linear-gradient(135deg,#1a237e,#283593);color:white;
+            padding:2rem;border-radius:16px;margin-bottom:1.5rem;">
+    <h1 style="margin:0 0 0.5rem;font-size:1.8rem;">⚖️ Asistente Tributario</h1>
+    <p style="margin:0;opacity:0.9;font-size:1rem;">
+        Bufete Ruiz Salazar · Consultas de normativa chilena
+    </p>
+    <hr style="border-color:rgba(255,255,255,0.2);margin:1rem 0;">
+    <p style="margin:0 0 0.3rem;">
+        📌 <strong>EP2 — Conversacional:</strong> Chat con agente LangGraph.
+        Hace búsquedas semánticas en DL-824, DL-825 y DL-830,
+        razona con auto-evaluación y genera memorándums .docx.
+    </p>
+    <p style="margin:0 0 0.3rem;">
+        📌 <strong>EP1 — Clásico:</strong> Consulta directa con control
+        de temperatura y K dinámico automático.
+    </p>
+    <p style="margin:0 0 0.3rem;">
+        📌 <strong>Dashboard:</strong> Monitoreo de precisión,
+        consistencia, latencia, errores y anomalías en
+        <code style="background:rgba(255,255,255,0.15);padding:2px 6px;border-radius:4px;">/admin</code>.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Configuración")
-
-k_docs = st.sidebar.slider(
-    "Fragmentos a recuperar (k):",
-    min_value=1,
-    max_value=8,
-    value=CONFIG.k_default,
-    help="Más fragmentos = más contexto disponible para el modelo.",
-)
 
 temperatura = st.sidebar.slider(
     "Temperatura del modelo:",
@@ -494,8 +460,21 @@ with tab_ep1:
                 with st.spinner("Buscando en la normativa..."):
                     t0 = time.time()
                     try:
-                        chain = cargar_chain(k_docs, temperatura)
-                        resultado = llamar_con_reintento(chain, consulta_ep1)
+                        k_dinamico = estimar_k_optimo(consulta_ep1)
+                        vectorstore = cargar_vectorstore()
+                        llm = get_llm(API_KEY, temperatura)
+                        retriever = vectorstore.as_retriever(
+                            search_type="similarity",
+                            search_kwargs={"k": k_dinamico},
+                        )
+                        chain = RetrievalQA.from_chain_type(
+                            llm=llm,
+                            chain_type="stuff",
+                            retriever=retriever,
+                            chain_type_kwargs={"prompt": get_prompt_template()},
+                            return_source_documents=True,
+                        )
+                        resultado = llamar_con_reintento(chain.invoke, {"query": consulta_ep1})
                         respuesta_raw = resultado["result"]
                         fuentes = resultado["source_documents"]
                         secciones = parsear_respuesta(respuesta_raw)
@@ -507,12 +486,12 @@ with tab_ep1:
                                 "respuesta_raw": respuesta_raw,
                                 "secciones": secciones,
                                 "fuentes": fuentes,
-                                "k_usado": k_docs,
+                                "k_usado": k_dinamico,
                                 "temperatura": temperatura,
                             }
                         )
                         logger.info("Consulta EP1 procesada con %d fragmentos.", len(fuentes))
-                        st.success(f"✅ Procesada con {len(fuentes)} fragmentos relevantes")
+                        st.success(f"✅ Procesada con {len(fuentes)} fragmentos relevantes (K={k_dinamico})")
 
                         get_monitor().registrar_consulta(
                             session_id=st.session_state.session_id,
@@ -523,7 +502,7 @@ with tab_ep1:
                             tiene_articulos=bool(secciones.get("articulos")),
                             tiene_limitaciones=bool(secciones.get("limitaciones")),
                             num_fuentes=len(fuentes),
-                            k_usado=k_docs,
+                            k_usado=k_dinamico,
                             temperatura=temperatura,
                             tiempo_ms=elapsed,
                         )

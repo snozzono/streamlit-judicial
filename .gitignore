@@ -21,6 +21,7 @@ build/
 casos/              # índice FAISS largo plazo — se genera al cerrar sesión
 memos/              # memorándums .docx generados en runtime
 docs/               # PDFs de normativa — demasiado pesados para el repo
+data/monitor.db     # base de datos de monitoreo SQLite — se genera en runtime
 
 # vectorstore/ NO está ignorado — se sube al repo para Streamlit Cloud
 

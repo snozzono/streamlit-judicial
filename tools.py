@@ -21,6 +21,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from openai import APIError, APIConnectionError, APITimeoutError, RateLimitError
 
 from config import CONFIG
 from memory import get_memoria_largo_plazo
@@ -56,6 +57,8 @@ def _get_embeddings() -> OpenAIEmbeddings:
 def llamar_con_reintento(llm_func, *args, max_attempts: int = None, **kwargs):
     """
     Envuelve llamadas a LLM con reintento automático y backoff exponencial.
+    Solo reintenta ante errores transitorios de API (RateLimitError, APITimeoutError,
+    APIConnectionError, APIError). Otros errores se lanzan de inmediato.
 
     Args:
         llm_func: función a llamar (ej. llm.invoke)
@@ -68,11 +71,12 @@ def llamar_con_reintento(llm_func, *args, max_attempts: int = None, **kwargs):
         última excepción después de agotar intentos
     """
     max_attempts = max_attempts or CONFIG.retry_max_attempts
+    errores_transitorios = (RateLimitError, APITimeoutError, APIConnectionError, APIError)
     last_error = None
     for intento in range(1, max_attempts + 1):
         try:
             return llm_func(*args, **kwargs)
-        except Exception as e:
+        except errores_transitorios as e:
             last_error = e
             error_name = type(e).__name__
             if intento < max_attempts:

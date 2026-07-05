@@ -147,6 +147,15 @@ if st.sidebar.button("🔄 Ejecutar ETL (hoy)", use_container_width=True):
         else:
             st.sidebar.info("Sin datos para hoy.")
 
+if st.sidebar.button("📥 Cargar datos de prueba", use_container_width=True):
+    with st.spinner("Generando datos sintéticos..."):
+        import subprocess, sys
+        result = subprocess.run([sys.executable, "seed_data.py"], capture_output=True, text=True)
+        if result.returncode == 0:
+            st.sidebar.success("✅ Datos de prueba cargados. Ejecuta ETL para verlos.")
+        else:
+            st.sidebar.error(f"❌ Error: {result.stderr[:200]}")
+
 if st.sidebar.button("🔄 Ejecutar ETL (todo)", use_container_width=True):
     with st.spinner("Procesando todas las fechas..."):
         fechas = set()

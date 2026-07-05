@@ -3,7 +3,6 @@ import time
 
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from openai import RateLimitError, APITimeoutError, APIError, APIConnectionError
 
 from config import CONFIG
 
@@ -91,6 +90,12 @@ def get_llm(api_key: str, temperature: float) -> ChatOpenAI:
         base_url=CONFIG.api_base_url,
         api_key=api_key,
     )
+
+
+def llamar_con_reintento(llm_func, *args, **kwargs):
+    """Re-export desde tools.py para retrocompatibilidad."""
+    from tools import llamar_con_reintento as _retry
+    return _retry(llm_func, *args, **kwargs)
 
 
 def validar_consulta(texto: str) -> str:

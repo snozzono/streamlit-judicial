@@ -641,7 +641,7 @@ class Monitor:
                         "fecha": hoy,
                     })
 
-                if row_hoy["precision_pct"] is not None and row_hoy["precision_pct"] < 40:
+                if row_hoy["precision_pct"] is not None and row_hoy["precision_pct"] < CONFIG.alert_precision_threshold:
                     alertas.append({
                         "tipo": "precision",
                         "severidad": "media",

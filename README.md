@@ -7,7 +7,7 @@ Agente conversacional con LangGraph para consultas de normativa tributaria chile
 | Mejora | Problema | Solución | Impacto |
 |--------|----------|----------|---------|
 | **Caché LRU** | Consultas repetitivas generaban el mismo costo y latencia | Caché thread-safe con TTL configurable indexado por SHA-256 | ~50ms vs ~2000ms en respuestas cacheadas |
-| **K dinámico** | K fijo (8) insuficiente para consultas transversales | Clasificador heurístico ajusta K entre 5–20 según complejidad | +5–10% precisión esperada |
+| **K dinámico** | K fijo (8) insuficiente para consultas transversales | Clasificador heurístico ajusta K entre 5–20 según complejidad. Aplica en ambas pestañas (EP1 y EP2). Se eliminó el slider manual de K. | +5–10% precisión esperada |
 | **Retry con backoff** | Timeouts de API sin reintento automático | 3 intentos con backoff exponencial (1s, 2s, 4s) | ~60% menos errores de API |
 | **Session ID** | Trazabilidad sin correlación entre eventos | UUID de 8 chars por sesión en todas las consultas/logs | Trazabilidad completa del flujo |
 | **Alertas automáticas** | Sin notificaciones de anomalías en dashboard | Detección de error rate >60%, latencia >10s, precisión <40% | Detección temprana de fallos |
@@ -198,7 +198,7 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 | `graph.py` | Grafo LangGraph: 8 nodos, fan-out paralelo con `Send`, loop de razonamiento adaptativo |
 | `cache.py` | Caché LRU thread-safe con TTL para respuestas de consultas frecuentes |
 | `indexar.py` | Indexación de PDFs → vectorstore FAISS (EP1, no modificar) |
-| `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica + caché + session_id |
+| `app.py` | Interfaz Streamlit: pestaña EP2 conversacional + pestaña EP1 clásica + K dinámico + caché + session_id |
 | `monitor_db.py` | Sistema de monitoreo SQLite: consultas, logs, ETL diario, anomalías, recomendaciones, alertas |
 | `pages/admin.py` | Dashboard administrativo con KPIs, gráficos, detección de anomalías y alertas |
 
@@ -208,7 +208,7 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 
 1. El usuario escribe una consulta en el chat (`st.chat_input`).
 2. **`classifier`** determina el modo: detecta palabras clave como "memo" o "redactar" para activar la generación de documento.
-3. **`buscar_normativa`** y **`buscar_casos`** se ejecutan en **paralelo** (fan-out via `Send`), consultando el vectorstore de normativa y el índice de casos anteriores simultáneamente.
+3. **`buscar_normativa`** (con K dinámico 5–20 según la complejidad de la consulta) y **`buscar_casos`** se ejecutan en **paralelo** (fan-out via `Send`), consultando el vectorstore de normativa y el índice de casos anteriores simultáneamente.
 4. **`evaluar_consulta`** usa un LLM secundario para calcular la confianza del contexto recuperado (0.0–1.0).
 5. Si confianza < 0.7 y quedan iteraciones: **`razonador`** genera una consulta refinada, realiza una búsqueda adicional en FAISS y repite la evaluación (máximo 2 veces).
 6. Si confianza ≥ 0.7: **`responder`** genera la respuesta estructurada (Análisis / Artículos citados / Limitaciones) o **`redactar_memo`** genera un `.docx` formal descargable.
@@ -230,7 +230,7 @@ Genera 105 consultas distribuidas en 7 días con perfiles variados (días normal
 
 **Caché LRU:** respuestas de consultas frecuentes se almacenan con hash SHA-256 y TTL configurable, reduciendo latencia de ~2000ms a ~50ms.
 
-**K dinámico:** el sistema estima automáticamente el número óptimo de fragmentos a recuperar (5–20) según la longitud y palabras clave de la consulta.
+**K dinámico:** el sistema estima automáticamente el número óptimo de fragmentos a recuperar (5–20) según la longitud y palabras clave de la consulta. Se aplica tanto en EP1 como en EP2, eliminando el slider manual de configuración de K.
 
 **Retry con backoff exponencial:** todas las llamadas al LLM incorporan hasta 3 reintentos con backoff (1s, 2s, 4s) para RateLimitError, APITimeoutError, APIConnectionError y APIError.
 
